@@ -40,6 +40,7 @@ use FireflyIII\TransactionRules\Actions\PrependDescription;
 use FireflyIII\TransactionRules\Actions\PrependNotes;
 use FireflyIII\TransactionRules\Actions\RemoveAllTags;
 use FireflyIII\TransactionRules\Actions\RemoveTag;
+use FireflyIII\TransactionRules\Actions\RemoveTransaction;
 use FireflyIII\TransactionRules\Actions\SetBudget;
 use FireflyIII\TransactionRules\Actions\SetCategory;
 use FireflyIII\TransactionRules\Actions\SetDescription;
@@ -408,6 +409,7 @@ return [
         'set_budget'              => SetBudget::class,
         'clear_budget'            => ClearBudget::class,
         'add_tag'                 => AddTag::class,
+        'remove_transaction'      => RemoveTransaction::class,
         'remove_tag'              => RemoveTag::class,
         'remove_all_tags'         => RemoveAllTags::class,
         'set_description'         => SetDescription::class,
