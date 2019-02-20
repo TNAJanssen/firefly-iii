@@ -27,6 +27,7 @@ use Carbon\Carbon;
 use FireflyIII\Models\Budget;
 use FireflyIII\Models\Category;
 use FireflyIII\Models\Tag;
+use FireflyIII\Models\Transaction;
 use FireflyIII\Models\TransactionCurrency;
 use FireflyIII\User;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
@@ -100,7 +101,7 @@ interface TransactionCollectorInterface
     /**
      * Get all transactions.
      *
-     * @return Collection
+     * @return Collection|Transaction[]
      */
     public function getTransactions(): Collection;
 

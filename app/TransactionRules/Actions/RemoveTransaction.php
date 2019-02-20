@@ -1,4 +1,3 @@
-
 <?php
 /**
  * RemoveTransaction.php
