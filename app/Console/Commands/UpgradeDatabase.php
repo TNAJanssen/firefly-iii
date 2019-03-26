@@ -28,6 +28,7 @@ declare(strict_types=1);
 
 namespace FireflyIII\Console\Commands;
 
+use Crypt;
 use DB;
 use Exception;
 use FireflyIII\Models\Account;
@@ -53,6 +54,7 @@ use FireflyIII\Repositories\Currency\CurrencyRepositoryInterface;
 use FireflyIII\Repositories\Journal\JournalRepositoryInterface;
 use FireflyIII\User;
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Log;
@@ -107,6 +109,22 @@ class UpgradeDatabase extends Command
     }
 
     /**
+     * @param string $value
+     *
+     * @return string
+     */
+    private function tryDecrypt(string $value): string
+    {
+        try {
+            $value = Crypt::decrypt($value);
+        } catch (DecryptException $e) {
+            Log::debug(sprintf('Could not decrypt. %s', $e->getMessage()));
+        }
+
+        return $value;
+    }
+
+    /**
      * Since it is one routine these warnings make sense and should be supressed.
      *
      * @SuppressWarnings(PHPMD.CyclomaticComplexity)
@@ -127,8 +145,14 @@ class UpgradeDatabase extends Command
 
                 return;
             }
+            $currencyCode = $this->tryDecrypt($currencyPreference->data);
 
-            $currency = TransactionCurrency::where('code', $currencyPreference->data)->first();
+            // try json decrypt just in case.
+            if (\strlen($currencyCode) > 3) {
+                $currencyCode = json_decode($currencyCode) ?? 'EUR';
+            }
+
+            $currency = TransactionCurrency::where('code', $currencyCode)->first();
             if (null === $currency) {
                 $this->line('Fall back to default currency in migrateBillsToRules().');
                 $currency = app('amount')->getDefaultCurrencyByUser($user);
@@ -268,11 +292,11 @@ class UpgradeDatabase extends Command
         if (!Schema::hasTable('transaction_journals')) {
             return;
         }
-        $subQuery   = TransactionJournal::leftJoin('transactions', 'transactions.transaction_journal_id', '=', 'transaction_journals.id')
-                                        ->whereNull('transaction_journals.deleted_at')
-                                        ->whereNull('transactions.deleted_at')
-                                        ->groupBy(['transaction_journals.id'])
-                                        ->select(['transaction_journals.id', DB::raw('COUNT(transactions.id) AS t_count')]);
+        $subQuery = TransactionJournal::leftJoin('transactions', 'transactions.transaction_journal_id', '=', 'transaction_journals.id')
+                                      ->whereNull('transaction_journals.deleted_at')
+                                      ->whereNull('transactions.deleted_at')
+                                      ->groupBy(['transaction_journals.id'])
+                                      ->select(['transaction_journals.id', DB::raw('COUNT(transactions.id) AS t_count')]);
         /** @noinspection PhpStrictTypeCheckingInspection */
         $result     = DB::table(DB::raw('(' . $subQuery->toSql() . ') AS derived'))
                         ->mergeBindings($subQuery->getQuery())
@@ -294,23 +318,38 @@ class UpgradeDatabase extends Command
      */
     public function updateAccountCurrencies(): void
     {
+        Log::debug('Now in updateAccountCurrencies()');
+
+        $defaultConfig = (string)config('firefly.default_currency', 'EUR');
+        Log::debug(sprintf('System default currency is "%s"', $defaultConfig));
+
         $accounts = Account::leftJoin('account_types', 'account_types.id', '=', 'accounts.account_type_id')
                            ->whereIn('account_types.type', [AccountType::DEFAULT, AccountType::ASSET])->get(['accounts.*']);
         /** @var AccountRepositoryInterface $repository */
         $repository = app(AccountRepositoryInterface::class);
         $accounts->each(
-            function (Account $account) use ($repository) {
+            function (Account $account) use ($repository, $defaultConfig) {
                 $repository->setUser($account->user);
                 // get users preference, fall back to system pref.
-                $defaultCurrencyCode = app('preferences')->getForUser($account->user, 'currencyPreference', config('firefly.default_currency', 'EUR'))->data;
-                $defaultCurrency     = TransactionCurrency::where('code', $defaultCurrencyCode)->first();
-                $accountCurrency     = (int)$repository->getMetaValue($account, 'currency_id');
-                $openingBalance      = $account->getOpeningBalance();
-                $obCurrency          = (int)$openingBalance->transaction_currency_id;
+
+                // expand and debug routine.
+                $defaultCurrencyCode = app('preferences')->getForUser($account->user, 'currencyPreference', $defaultConfig)->data;
+                Log::debug(sprintf('Default currency code is "%s"', var_export($defaultCurrencyCode, true)));
+                if (!is_string($defaultCurrencyCode)) {
+                    $defaultCurrencyCode = $defaultConfig;
+                    Log::debug(sprintf('Default currency code is not a string, now set to "%s"', $defaultCurrencyCode));
+                }
+                $defaultCurrency = TransactionCurrency::where('code', $defaultCurrencyCode)->first();
+                $accountCurrency = (int)$repository->getMetaValue($account, 'currency_id');
+                $openingBalance  = $account->getOpeningBalance();
+                $obCurrency      = (int)$openingBalance->transaction_currency_id;
 
                 if (null === $defaultCurrency) {
-                    throw new UnexpectedValueException('The default currency is NULL, and this is more or less impossible.');
+                    throw new UnexpectedValueException(sprintf('User has a preference for "%s", but this currency does not exist.', $defaultCurrencyCode));
                 }
+                Log::debug(
+                    sprintf('Found default currency #%d (%s) while searching for "%s"', $defaultCurrency->id, $defaultCurrency->code, $defaultCurrencyCode)
+                );
 
                 // both 0? set to default currency:
                 if (0 === $accountCurrency && 0 === $obCurrency) {
